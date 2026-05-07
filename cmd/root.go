@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var rootCmd = &cobra.Command{
@@ -32,7 +33,17 @@ func Execute() {
 	}
 }
 
+func initConfig() {
+	viper.SetConfigName(".taso")
+	viper.SetConfigType("yaml") // It will search for .taso.yaml, .taso.json, etc.
+	viper.AddConfigPath(".")
+
+	// We don't care if it errors here (e.g. file not found)
+	_ = viper.ReadInConfig()
+}
+
 func init() {
+	cobra.OnInitialize(initConfig)
 	rootCmd.AddCommand(ghostCmd)
 	rootCmd.AddCommand(snapCmd)
 	rootCmd.AddCommand(driftCmd)

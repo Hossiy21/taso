@@ -8,6 +8,7 @@ import (
 	"github.com/Hossiy21/taso/internal/scanner"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var scoreJSON bool
@@ -58,7 +59,7 @@ func runScore(cmd *cobra.Command, args []string) error {
 		}
 		report.TotalKeys = len(knownKeys)
 
-		findings, err := scanner.ScanDir(".")
+		findings, err := scanner.ScanDir(".", viper.GetStringSlice("ignored_dirs"))
 		if err == nil {
 			ghosts := 0
 			for varName := range findings {

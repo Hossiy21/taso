@@ -11,12 +11,14 @@ import (
 	"github.com/Hossiy21/taso/internal/scanner"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
 	ghostDir      string
 	ghostEnvFiles []string
 	ghostJSON     bool
+	ghostFix      bool
 )
 
 var ghostCmd = &cobra.Command{
@@ -36,6 +38,7 @@ func init() {
 	ghostCmd.Flags().StringVar(&ghostDir, "dir", ".", "Directory to scan for source files")
 	ghostCmd.Flags().StringArrayVar(&ghostEnvFiles, "env", nil, "Env files to check against (auto-detected if not set)")
 	ghostCmd.Flags().BoolVar(&ghostJSON, "json", false, "Output results as JSON")
+	ghostCmd.Flags().BoolVar(&ghostFix, "fix", false, "Auto-add missing variables to your .env file")
 }
 
 func runGhost(cmd *cobra.Command, args []string) error {
@@ -56,19 +59,59 @@ func runGhost(cmd *cobra.Command, args []string) error {
 		loadedFiles = append(loadedFiles, ef)
 	}
 
-	findings, err := scanner.ScanDir(ghostDir)
+	findings, err := scanner.ScanDir(ghostDir, viper.GetStringSlice("ignored_dirs"))
 	if err != nil {
 		return fmt.Errorf("scan failed: %w", err)
 	}
 
+	ghosts := buildGhosts(findings, knownKeys)
+
+	if ghostFix && len(ghosts) > 0 {
+		err := autoFixEnv(ghosts, loadedFiles, ghostDir)
+		if err != nil {
+			return fmt.Errorf("auto-fix failed: %w", err)
+		}
+		// Refresh knownKeys after fix so we don't print them as ghosts anymore
+		for k := range ghosts {
+			if k != "__DYNAMIC_ENV_USAGE__" {
+				knownKeys[k] = true
+			}
+		}
+		ghosts = buildGhosts(findings, knownKeys)
+	}
+
 	if ghostJSON {
-		ghosts := buildGhosts(findings, knownKeys)
 		return printGhostJSON(ghosts, loadedFiles)
 	}
-	return printGhostHuman(findings, knownKeys, loadedFiles)
+	return printGhostHuman(ghosts, findings, loadedFiles)
 }
 
-func printGhostHuman(findings map[string][]scanner.Usage, knownKeys map[string]bool, loadedFiles []string) error {
+func autoFixEnv(ghosts map[string][]scanner.Usage, loadedFiles []string, dir string) error {
+	targetFile := filepath.Join(dir, ".env")
+	if len(loadedFiles) > 0 {
+		targetFile = loadedFiles[0]
+	}
+
+	f, err := os.OpenFile(targetFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Write a newline just in case the file didn't end with one
+	f.WriteString("\n")
+
+	keys := sortedKeys(ghosts)
+	for _, k := range keys {
+		if k == "__DYNAMIC_ENV_USAGE__" {
+			continue
+		}
+		f.WriteString(fmt.Sprintf("%s=\n", k))
+	}
+	return nil
+}
+
+func printGhostHuman(ghosts map[string][]scanner.Usage, findings map[string][]scanner.Usage, loadedFiles []string) error {
 	r := ui.NewRenderer()
 
 	r.Println(ui.Dim("  Scanning: " + ghostDir))
@@ -89,11 +132,14 @@ func printGhostHuman(findings map[string][]scanner.Usage, knownKeys map[string]b
 	}
 
 	// No env files — just show everything found in code
-	if len(loadedFiles) == 0 {
+	if len(loadedFiles) == 0 && !ghostFix {
 		names := sortedKeys(findings)
 		r.Println(ui.Bold(fmt.Sprintf("  %d env var(s) used in your code:", len(names))))
 		r.Println("")
 		for _, name := range names {
+			if name == "__DYNAMIC_ENV_USAGE__" {
+				continue
+			}
 			r.Println(ui.Bold("  " + name))
 			for _, u := range findings[name] {
 				r.Println(ui.Dim(fmt.Sprintf("    %s:%d", u.File, u.Line)))
@@ -104,9 +150,6 @@ func printGhostHuman(findings map[string][]scanner.Usage, knownKeys map[string]b
 		fmt.Print(r.String())
 		return nil
 	}
-
-	// Cross-check against env files
-	ghosts := buildGhosts(findings, knownKeys)
 
 	if len(ghosts) == 0 {
 		r.Println(ui.Success("  ✔  No ghost variables found — your env is clean!"))
@@ -119,6 +162,15 @@ func printGhostHuman(findings map[string][]scanner.Usage, knownKeys map[string]b
 	r.Println("")
 
 	for _, name := range names {
+		if name == "__DYNAMIC_ENV_USAGE__" {
+			r.Println(ui.Warn2("  ⚠️  Dynamic Environment Variables Detected"))
+			for _, u := range ghosts[name] {
+				r.Println(ui.Dim(fmt.Sprintf("    used in:  %s:%d (Cannot auto-resolve)", u.File, u.Line)))
+			}
+			r.Println("")
+			continue
+		}
+
 		usages := ghosts[name]
 		r.Println(ui.Bold("  " + name))
 		for _, u := range usages {

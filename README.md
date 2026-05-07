@@ -73,6 +73,7 @@ Supports: Go (AST-based), JavaScript/TypeScript, Python, Rust, Ruby, Java.
 
 ```bash
 taso ghost
+taso ghost --fix                   # Auto-add missing vars to .env
 taso ghost --dir ./src --env .env.production
 taso ghost --json
 ```
@@ -154,6 +155,10 @@ $ taso share
 | Ruby | `ENV["KEY"]`, `ENV.fetch("KEY")` |
 | Java | `System.getenv("KEY")` |
 
+> [!NOTE]
+> **Dynamic Keys:** Taso uses AST for Go (100% accurate) and optimized regex for other languages. If you use dynamic key generation (e.g., `process.env[someVar]`), Taso will detect the pattern and issue a warning, but cannot auto-resolve the key name.
+
+
 ---
 
 ## JSON output
@@ -164,6 +169,20 @@ Every command supports `--json` for CI/CD and scripting:
 taso ghost --json
 taso score --json
 taso drift --json
+```
+
+---
+
+## Configuration
+
+Taso supports a `.taso.yaml` (or `.json`) file in your project root for persistent settings.
+
+```yaml
+# .taso.yaml
+ignored_dirs:
+  - vendor
+  - custom_build_folder
+  - dist
 ```
 
 ---
