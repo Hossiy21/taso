@@ -7,11 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 	"unicode"
 )
 
 var dynamicPattern = regexp.MustCompile(`process\.env\[[^'"`+"`"+`"\n]+\]`)
+var aliasPatternJS = regexp.MustCompile(`(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*process\.env`)
+var aliasPatternPy = regexp.MustCompile(`([a-zA-Z0-9_]+)\s*=\s*os\.environ`)
 
 // Usage records where an env var was found in source code
 type Usage struct {
@@ -23,45 +27,85 @@ type Usage struct {
 // ScanDir walks a directory and returns a map of env var name -> []Usage
 func ScanDir(root string, extraIgnores []string) (map[string][]Usage, error) {
 	results := map[string][]Usage{}
+	var mu sync.Mutex
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // skip unreadable files
-		}
-		if info.IsDir() {
-			if shouldSkipDir(info.Name(), extraIgnores) {
-				return filepath.SkipDir
+	type task struct {
+		path string
+		ext  string
+	}
+
+	taskChan := make(chan task, 100)
+	errChan := make(chan error, 1)
+	var wg sync.WaitGroup
+
+	// Start workers
+	numWorkers := runtime.NumCPU()
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskChan {
+				var findings map[string][]Usage
+				switch t.ext {
+				case ".go":
+					findings = scanGo(t.path)
+				case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs":
+					findings = scanJS(t.path)
+				case ".py":
+					findings = scanPython(t.path)
+				case ".rs":
+					findings = scanRust(t.path)
+				case ".rb":
+					findings = scanRuby(t.path)
+				case ".java":
+					findings = scanJava(t.path)
+				}
+
+				if len(findings) > 0 {
+					mu.Lock()
+					for k, v := range findings {
+						results[k] = append(results[k], v...)
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	// Walk and dispatch
+	go func() {
+		defer close(taskChan)
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				if shouldSkipDir(info.Name(), extraIgnores) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			ext := strings.ToLower(filepath.Ext(path))
+			switch ext {
+			case ".go", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".py", ".rs", ".rb", ".java":
+				taskChan <- task{path: path, ext: ext}
 			}
 			return nil
+		})
+		if err != nil {
+			errChan <- err
 		}
+	}()
 
-		ext := strings.ToLower(filepath.Ext(path))
-		var findings map[string][]Usage
+	wg.Wait()
 
-		switch ext {
-		case ".go":
-			findings = scanGo(path)
-		case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs":
-			findings = scanJS(path)
-		case ".py":
-			findings = scanPython(path)
-		case ".rs":
-			findings = scanRust(path)
-		case ".rb":
-			findings = scanRuby(path)
-		case ".java":
-			findings = scanJava(path)
-		default:
-			return nil
-		}
-
-		for k, v := range findings {
-			results[k] = append(results[k], v...)
-		}
-		return nil
-	})
-
-	return results, err
+	select {
+	case err := <-errChan:
+		return nil, err
+	default:
+		return results, nil
+	}
 }
 
 // shouldSkipDir returns true for dirs that should never be scanned
@@ -241,6 +285,22 @@ func scanWithPatterns(path string, lang string, patterns []*regexp.Regexp) map[s
 					Lang: lang,
 				})
 			}
+		}
+
+		// Alias detection
+		if lang == "js" && aliasPatternJS.MatchString(line) {
+			results["__ALIAS_DETECTION__"] = append(results["__ALIAS_DETECTION__"], Usage{
+				File: path,
+				Line: lineNum + 1,
+				Lang: lang,
+			})
+		}
+		if lang == "python" && aliasPatternPy.MatchString(line) {
+			results["__ALIAS_DETECTION__"] = append(results["__ALIAS_DETECTION__"], Usage{
+				File: path,
+				Line: lineNum + 1,
+				Lang: lang,
+			})
 		}
 
 		line = stripInlineComments(line)

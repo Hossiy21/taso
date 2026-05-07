@@ -31,7 +31,7 @@ line2"
 		"DB_HOST":  "localhost",
 		"PASSWORD": "secret",
 		"EMPTY":    "",
-		"MULTI":    "line1line2",
+		"MULTI":    "line1\nline2",
 	}
 
 	for k, v := range want {

@@ -77,6 +77,10 @@ func runGhost(cmd *cobra.Command, args []string) error {
 				knownKeys[k] = true
 			}
 		}
+		// Also "fix" aliases by not reporting them as ghosts, just keep them for warning
+		if _, ok := ghosts["__ALIAS_DETECTION__"]; ok {
+			knownKeys["__ALIAS_DETECTION__"] = true
+		}
 		ghosts = buildGhosts(findings, knownKeys)
 	}
 
@@ -166,6 +170,15 @@ func printGhostHuman(ghosts map[string][]scanner.Usage, findings map[string][]sc
 			r.Println(ui.Warn2("  ⚠️  Dynamic Environment Variables Detected"))
 			for _, u := range ghosts[name] {
 				r.Println(ui.Dim(fmt.Sprintf("    used in:  %s:%d (Cannot auto-resolve)", u.File, u.Line)))
+			}
+			r.Println("")
+			continue
+		}
+
+		if name == "__ALIAS_DETECTION__" {
+			r.Println(ui.Warn2("  ⚠️  Environment Alias Detected"))
+			for _, u := range ghosts[name] {
+				r.Println(ui.Dim(fmt.Sprintf("    used in:  %s:%d (Tracking limited)", u.File, u.Line)))
 			}
 			r.Println("")
 			continue

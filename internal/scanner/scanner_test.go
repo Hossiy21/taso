@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,5 +79,51 @@ text = "os.getenv('FAKE')"
 
 	if keys["FAKE"] {
 		t.Fatal("unexpected key detected from string literal")
+	}
+}
+
+func TestScanDirConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	// Create 50 small files to test concurrency
+	for i := 0; i < 50; i++ {
+		path := filepath.Join(dir, filepath.FromSlash(fmt.Sprintf("test_%d.js", i)))
+		content := fmt.Sprintf("const v%d = process.env.VAR_%d;", i, i)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	results, err := ScanDir(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	for k := range results {
+		if k != "__DYNAMIC_ENV_USAGE__" && k != "__ALIAS_DETECTION__" {
+			count++
+		}
+	}
+
+	if count != 50 {
+		t.Fatalf("expected 50 results, got %d", count)
+	}
+}
+
+func TestAliasDetection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "alias.js")
+	content := `const env = process.env;`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := ScanDir(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := results["__ALIAS_DETECTION__"]; !ok {
+		t.Fatal("expected alias to be detected")
 	}
 }
