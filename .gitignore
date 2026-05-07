@@ -1,0 +1,26 @@
+# binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# build outputs
+/bin/
+/dist/
+/build/
+/out/
+
+# env files
+*.env
+!.env.example
+
+# tool cache
+.taso/
+
+# test binaries
+*.test
+
+# OS junk
+.DS_Store
+Thumbs.db
