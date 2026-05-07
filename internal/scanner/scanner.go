@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Usage records where an env var was found in source code
@@ -130,9 +131,12 @@ func scanGo(path string) map[string][]Usage {
 
 var jsPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`process\.env\.([A-Z][A-Z0-9_]*)`),
-	regexp.MustCompile(`process\.env\[['"]([A-Z][A-Z0-9_]*)['"]`),
+	regexp.MustCompile(`process\.env\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
 	regexp.MustCompile(`process\.env\?\.([A-Z][A-Z0-9_]*)`),
-	regexp.MustCompile(`import\.meta\.env\.([A-Z][A-Z0-9_]*)`), // Vite
+	regexp.MustCompile(`process\.env\?\.\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
+	regexp.MustCompile(`import\.meta\.env\.([A-Z][A-Z0-9_]*)`),
+	regexp.MustCompile(`import\.meta\.env\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
+	regexp.MustCompile(`import\.meta\.env\?\.\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
 }
 
 func scanJS(path string) map[string][]Usage {
@@ -143,10 +147,11 @@ func scanJS(path string) map[string][]Usage {
 // Catches: os.environ["KEY"], os.environ.get("KEY"), os.getenv("KEY")
 
 var pyPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`os\.environ\[['"]([A-Z][A-Z0-9_]*)['"]`),
-	regexp.MustCompile(`os\.environ\.get\(['"]([A-Z][A-Z0-9_]*)['"]`),
-	regexp.MustCompile(`os\.getenv\(['"]([A-Z][A-Z0-9_]*)['"]`),
-	regexp.MustCompile(`environ\.get\(['"]([A-Z][A-Z0-9_]*)['"]`),
+	regexp.MustCompile(`os\.environ\[['"]([A-Z][A-Z0-9_]*)['"]\]`),
+	regexp.MustCompile(`os\.environ\.get\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
+	regexp.MustCompile(`os\.environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
+	regexp.MustCompile(`os\.getenv\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
+	regexp.MustCompile(`environ\.get\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
 }
 
 func scanPython(path string) map[string][]Usage {
@@ -157,10 +162,10 @@ func scanPython(path string) map[string][]Usage {
 // Catches: env::var("KEY"), std::env::var("KEY"), env!("KEY")
 
 var rustPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`env::var\(["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`std::env::var\(["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`env!\(["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`option_env!\(["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`env::var\(\s*["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`std::env::var\(\s*["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`env!\(\s*["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`option_env!\(\s*["']([A-Z][A-Z0-9_]*)["']`),
 }
 
 func scanRust(path string) map[string][]Usage {
@@ -171,8 +176,8 @@ func scanRust(path string) map[string][]Usage {
 // Catches: ENV["KEY"], ENV.fetch("KEY"), ENV['KEY']
 
 var rubyPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`ENV\[["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`ENV\.fetch\(["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`ENV\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]`),
+	regexp.MustCompile(`ENV\.fetch\(\s*["']([A-Z][A-Z0-9_]*)["']`),
 }
 
 func scanRuby(path string) map[string][]Usage {
@@ -183,7 +188,7 @@ func scanRuby(path string) map[string][]Usage {
 // Catches: System.getenv("KEY")
 
 var javaPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`System\.getenv\(["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`System\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']`),
 }
 
 func scanJava(path string) map[string][]Usage {
@@ -202,12 +207,13 @@ func scanWithPatterns(path string, lang string, patterns []*regexp.Regexp) map[s
 
 	lines := strings.Split(string(content), "\n")
 	for lineNum, line := range lines {
-		// Skip comment lines
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") ||
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") ||
 			strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "/*") {
 			continue
 		}
+
+		line = stripInlineComments(line)
 
 		for _, pat := range patterns {
 			matches := pat.FindAllStringSubmatch(line, -1)
@@ -225,4 +231,70 @@ func scanWithPatterns(path string, lang string, patterns []*regexp.Regexp) map[s
 	}
 
 	return results
+}
+
+func stripInlineComments(line string) string {
+	line = stripBlockComments(line)
+
+	var out strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	for i, ch := range line {
+		if escaped {
+			out.WriteRune(ch)
+			escaped = false
+			continue
+		}
+
+		if ch == '\\' {
+			escaped = true
+			out.WriteRune(ch)
+			continue
+		}
+
+		if ch == '"' && !inSingle {
+			inDouble = !inDouble
+			out.WriteRune(ch)
+			continue
+		}
+
+		if ch == '\'' && !inDouble {
+			inSingle = !inSingle
+			out.WriteRune(ch)
+			continue
+		}
+
+		if !inSingle && !inDouble {
+			if ch == '/' && i+1 < len(line) && line[i+1] == '/' {
+				if i == 0 || unicode.IsSpace(rune(line[i-1])) {
+					break
+				}
+			}
+			if ch == '#' {
+				if i == 0 || unicode.IsSpace(rune(line[i-1])) {
+					break
+				}
+			}
+		}
+
+		out.WriteRune(ch)
+	}
+
+	return out.String()
+}
+
+func stripBlockComments(line string) string {
+	for {
+		start := strings.Index(line, "/*")
+		if start < 0 {
+			return line
+		}
+		end := strings.Index(line[start+2:], "*/")
+		if end < 0 {
+			return line[:start]
+		}
+		line = line[:start] + line[start+2+end+2:]
+	}
 }
