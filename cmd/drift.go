@@ -11,7 +11,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var driftJSON bool
+var (
+	driftJSON bool
+	driftDir  string
+)
 
 var driftCmd = &cobra.Command{
 	Use:   "drift",
@@ -29,6 +32,7 @@ Examples:
 
 func init() {
 	driftCmd.Flags().BoolVar(&driftJSON, "json", false, "Output as JSON")
+	driftCmd.Flags().StringVar(&driftDir, "dir", ".", "Directory to check drift in")
 }
 
 func runDrift(cmd *cobra.Command, args []string) error {

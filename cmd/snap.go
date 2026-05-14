@@ -23,7 +23,10 @@ type Snapshot struct {
 	Keys      map[string]string `json:"keys"` // key -> masked value hash
 }
 
-var snapEnvFiles []string
+var (
+	snapEnvFiles []string
+	snapDir      string
+)
 
 var snapCmd = &cobra.Command{
 	Use:   "snap",
@@ -39,6 +42,7 @@ Examples:
 
 func init() {
 	snapCmd.Flags().StringArrayVar(&snapEnvFiles, "env", nil, "Env files to snapshot (auto-detected if not set)")
+	snapCmd.Flags().StringVar(&snapDir, "dir", ".", "Directory to snapshot")
 }
 
 func runSnap(cmd *cobra.Command, args []string) error {
@@ -54,9 +58,9 @@ func runSnap(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(snapEnvFiles) == 0 {
-		snapEnvFiles = autoDetectEnvFiles(".")
+		snapEnvFiles = autoDetectEnvFiles(snapDir)
 		if len(snapEnvFiles) == 0 {
-			return fmt.Errorf("no .env files found. Use --env to specify one")
+			return fmt.Errorf("no .env files found in %s. Use --env to specify one", snapDir)
 		}
 	}
 

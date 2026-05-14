@@ -17,6 +17,7 @@ import (
 var (
 	scoreJSON bool
 	scoreFail bool
+	scoreDir  string
 )
 
 // scoreCmd represents the score command
@@ -36,6 +37,7 @@ Examples:
 func init() {
 	scoreCmd.Flags().BoolVar(&scoreJSON, "json", false, "Output as JSON")
 	scoreCmd.Flags().BoolVar(&scoreFail, "fail", false, "Exit with error code 1 if score < 80 (for CI/CD)")
+	scoreCmd.Flags().StringVar(&scoreDir, "dir", ".", "Directory to score")
 }
 
 type scoreReport struct {
@@ -56,7 +58,7 @@ func runScore(cmd *cobra.Command, args []string) error {
 	score := 100
 	issues := []string{}
 
-	envFiles := autoDetectEnvFiles(".")
+	envFiles := autoDetectEnvFiles(scoreDir)
 
 	// Factor 1: Ghost vars (-8 per ghost, max -40)
 	if len(envFiles) > 0 {
