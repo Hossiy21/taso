@@ -24,6 +24,7 @@ var (
 	ghostEnvFiles []string
 	ghostJSON     bool
 	ghostFix      bool
+	ghostFail     bool
 )
 
 var ghostCmd = &cobra.Command{
@@ -44,6 +45,7 @@ func init() {
 	ghostCmd.Flags().StringArrayVar(&ghostEnvFiles, "env", nil, "Env files to check against (auto-detected if not set)")
 	ghostCmd.Flags().BoolVar(&ghostJSON, "json", false, "Output results as JSON")
 	ghostCmd.Flags().BoolVar(&ghostFix, "fix", false, "Auto-add missing variables to your .env file")
+	ghostCmd.Flags().BoolVar(&ghostFail, "fail", false, "Exit with error code 1 if ghosts are found (for CI/CD)")
 }
 
 func runGhost(cmd *cobra.Command, args []string) error {
@@ -148,7 +150,17 @@ func runGhost(cmd *cobra.Command, args []string) error {
 	if ghostJSON {
 		return printGhostJSON(ghosts, loadedFiles)
 	}
-	return printGhostHuman(ghosts, findings, loadedFiles)
+
+	err = printGhostHuman(ghosts, findings, loadedFiles)
+	if err != nil {
+		return err
+	}
+
+	if ghostFail && len(ghosts) > 0 {
+		return fmt.Errorf("CI check failed: %d ghost variable(s) detected", len(ghosts))
+	}
+
+	return nil
 }
 
 func autoFixEnv(ghosts map[string][]scanner.Usage, loadedFiles []string, dir string) error {

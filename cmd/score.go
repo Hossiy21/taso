@@ -14,7 +14,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-var scoreJSON bool
+var (
+	scoreJSON bool
+	scoreFail bool
+)
 
 // scoreCmd represents the score command
 var scoreCmd = &cobra.Command{
@@ -32,6 +35,7 @@ Examples:
 
 func init() {
 	scoreCmd.Flags().BoolVar(&scoreJSON, "json", false, "Output as JSON")
+	scoreCmd.Flags().BoolVar(&scoreFail, "fail", false, "Exit with error code 1 if score < 80 (for CI/CD)")
 }
 
 type scoreReport struct {
@@ -149,9 +153,22 @@ func runScore(cmd *cobra.Command, args []string) error {
 	}
 
 	if scoreJSON {
-		return printScoreJSON(report)
+		err := printScoreJSON(report)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := printScoreHuman(report)
+		if err != nil {
+			return err
+		}
 	}
-	return printScoreHuman(report)
+
+	if scoreFail && report.Score < 80 {
+		return fmt.Errorf("CI check failed: Environment health score is too low (%d/100)", report.Score)
+	}
+
+	return nil
 }
 
 func printScoreHuman(r *scoreReport) error {
