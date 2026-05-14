@@ -4,7 +4,7 @@
 
 We take security seriously. If you discover a security vulnerability in Taso, please **do not** open a public GitHub issue. Instead, please follow these steps:
 
-1. **Report privately**: Email security concerns to [security@taso-project.dev](mailto:security@taso-project.dev) or open a [GitHub Security Advisory](https://github.com/Hossiy21/taso/security/advisories).
+1. **Report privately**: Email security concerns to [yhosaina@outlook.com](mailto:yhosaina@outlook.com) or open a [GitHub Security Advisory](https://github.com/Hossiy21/taso/security/advisories).
 2. **Include details**:
    - Description of the vulnerability
    - Steps to reproduce
