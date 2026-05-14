@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/Hossiy21/taso/internal/audit"
 	"github.com/Hossiy21/taso/internal/envreader"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
@@ -40,6 +42,17 @@ func init() {
 }
 
 func runSnap(cmd *cobra.Command, args []string) error {
+	startTime := time.Now()
+
+	// SECURITY: Validate env file paths
+	if len(snapEnvFiles) > 0 {
+		for _, ef := range snapEnvFiles {
+			if strings.Contains(ef, "..") {
+				return fmt.Errorf("directory traversal not allowed in env file path: %q", ef)
+			}
+		}
+	}
+
 	if len(snapEnvFiles) == 0 {
 		snapEnvFiles = autoDetectEnvFiles(".")
 		if len(snapEnvFiles) == 0 {
@@ -87,6 +100,14 @@ func runSnap(cmd *cobra.Command, args []string) error {
 	r.Println(ui.Dim("   " + absPath))
 	r.Println(ui.Dim("   Run 'taso drift' anytime to see what changed."))
 	fmt.Print(r.String())
+
+	// Log successful audit entry
+	logger, _ := audit.NewLogger(".taso/audit")
+	if logger != nil {
+		logger.Log(audit.BuildEntry("snap", ".", snapEnvFiles,
+			len(combined), 0, 0, time.Since(startTime), "success"))
+	}
+
 	return nil
 }
 

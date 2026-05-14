@@ -3,8 +3,11 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/Hossiy21/taso/internal/audit"
 	"github.com/Hossiy21/taso/internal/envreader"
+	"github.com/Hossiy21/taso/internal/cache"
 	"github.com/Hossiy21/taso/internal/scanner"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
@@ -13,6 +16,7 @@ import (
 
 var scoreJSON bool
 
+// scoreCmd represents the score command
 var scoreCmd = &cobra.Command{
 	Use:   "score",
 	Short: "Show your project's env health score (0–100)",
@@ -42,6 +46,8 @@ type scoreReport struct {
 }
 
 func runScore(cmd *cobra.Command, args []string) error {
+	startTime := time.Now()
+
 	report := &scoreReport{}
 	score := 100
 	issues := []string{}
@@ -59,7 +65,15 @@ func runScore(cmd *cobra.Command, args []string) error {
 		}
 		report.TotalKeys = len(knownKeys)
 
-		findings, err := scanner.ScanDir(".", viper.GetStringSlice("ignored_dirs"))
+		// CACHE: Load cache store
+		cacheStore, _ := cache.NewStore(".taso")
+
+		findings, err := scanner.ScanDir(".", viper.GetStringSlice("ignored_dirs"), cacheStore)
+		
+		// CACHE: Save cache
+		if cacheStore != nil {
+			_ = cacheStore.Save()
+		}
 		if err == nil {
 			ghosts := 0
 			for varName := range findings {
@@ -126,6 +140,13 @@ func runScore(cmd *cobra.Command, args []string) error {
 	report.Score = score
 	report.Grade = scoreGrade(score)
 	report.Issues = issues
+
+	// Log successful audit entry
+	logger, _ := audit.NewLogger(".taso/audit")
+	if logger != nil {
+		logger.Log(audit.BuildEntry("score", ".", envFiles,
+			report.Score, 0, 0, time.Since(startTime), "success"))
+	}
 
 	if scoreJSON {
 		return printScoreJSON(report)

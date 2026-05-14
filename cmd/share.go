@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
+	"github.com/Hossiy21/taso/internal/audit"
 	"github.com/Hossiy21/taso/internal/envreader"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
@@ -30,6 +33,17 @@ func init() {
 }
 
 func runShare(cmd *cobra.Command, args []string) error {
+	startTime := time.Now()
+
+	// SECURITY: Validate env file paths
+	if len(shareEnvFiles) > 0 {
+		for _, ef := range shareEnvFiles {
+			if strings.Contains(ef, "..") {
+				return fmt.Errorf("directory traversal not allowed in env file path: %q", ef)
+			}
+		}
+	}
+
 	if len(shareEnvFiles) == 0 {
 		shareEnvFiles = autoDetectEnvFiles(".")
 		if len(shareEnvFiles) == 0 {
@@ -77,6 +91,14 @@ func runShare(cmd *cobra.Command, args []string) error {
 	r.Println(ui.Dim("  Share this fingerprint with teammates to verify env parity."))
 	r.Println(ui.Dim("  No values are included — only key names and types."))
 	fmt.Print(r.String())
+
+	// Log successful audit entry
+	logger, _ := audit.NewLogger(".taso/audit")
+	if logger != nil {
+		logger.Log(audit.BuildEntry("share", ".", shareEnvFiles,
+			len(keys), 0, 0, time.Since(startTime), "success"))
+	}
+
 	return nil
 }
 

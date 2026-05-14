@@ -1,14 +1,19 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/Hossiy21/taso/internal/audit"
+	"github.com/Hossiy21/taso/internal/cache"
 	"github.com/Hossiy21/taso/internal/envreader"
 	"github.com/Hossiy21/taso/internal/scanner"
+	"github.com/Hossiy21/taso/internal/security"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -42,8 +47,26 @@ func init() {
 }
 
 func runGhost(cmd *cobra.Command, args []string) error {
+	startTime := time.Now()
+
+	// SECURITY: Prevent directory traversal in user-provided scan directory
+	if err := security.ValidateScanPath(ghostDir, ""); err != nil {
+		return err
+	}
+
+	// Validate and sanitize env file paths
+	validatedEnvFiles := []string{}
 	if len(ghostEnvFiles) == 0 {
 		ghostEnvFiles = findAllEnvFiles(ghostDir)
+	} else {
+		// Validate user-provided env files
+		for _, ef := range ghostEnvFiles {
+			if err := security.ValidateEnvFilePath(ef); err != nil {
+				return fmt.Errorf("invalid env file %q: %w", ef, err)
+			}
+			validatedEnvFiles = append(validatedEnvFiles, ef)
+		}
+		ghostEnvFiles = validatedEnvFiles
 	}
 
 	knownKeys := map[string]bool{}
@@ -59,29 +82,67 @@ func runGhost(cmd *cobra.Command, args []string) error {
 		loadedFiles = append(loadedFiles, ef)
 	}
 
-	findings, err := scanner.ScanDir(ghostDir, viper.GetStringSlice("ignored_dirs"))
+	// CACHE: Load cache store
+	cacheStore, _ := cache.NewStore(".taso")
+
+	findings, err := scanner.ScanDir(ghostDir, viper.GetStringSlice("ignored_dirs"), cacheStore)
 	if err != nil {
+		// Log error to audit trail
+		logger, _ := audit.NewLogger(".taso/audit")
+		if logger != nil {
+			logger.Log(audit.BuildErrorEntry("ghost", ghostDir, ghostEnvFiles, err.Error()))
+		}
 		return fmt.Errorf("scan failed: %w", err)
+	}
+
+	// CACHE: Save updated cache
+	if cacheStore != nil {
+		_ = cacheStore.Save()
 	}
 
 	ghosts := buildGhosts(findings, knownKeys)
 
 	if ghostFix && len(ghosts) > 0 {
-		err := autoFixEnv(ghosts, loadedFiles, ghostDir)
-		if err != nil {
-			return fmt.Errorf("auto-fix failed: %w", err)
-		}
-		// Refresh knownKeys after fix so we don't print them as ghosts anymore
+		// Filter out special keys for the preview
+		keys := []string{}
 		for k := range ghosts {
-			if k != "__DYNAMIC_ENV_USAGE__" {
-				knownKeys[k] = true
+			if k != "__DYNAMIC_ENV_USAGE__" && k != "__ALIAS_DETECTION__" {
+				keys = append(keys, k)
 			}
 		}
-		// Also "fix" aliases by not reporting them as ghosts, just keep them for warning
-		if _, ok := ghosts["__ALIAS_DETECTION__"]; ok {
-			knownKeys["__ALIAS_DETECTION__"] = true
+
+		if len(keys) > 0 {
+			fmt.Printf(ui.Warn2("  ? Auto-add %d missing variables to .env? [y/N] "), len(keys))
+			var response string
+			fmt.Scanln(&response)
+			
+			fr := ui.NewRenderer()
+			if strings.ToLower(response) == "y" {
+				err := autoFixEnv(ghosts, loadedFiles, ghostDir)
+				if err != nil {
+					return fmt.Errorf("auto-fix failed: %w", err)
+				}
+				fr.Println(ui.Success(fmt.Sprintf("  ✔  Added %d variables to .env", len(keys))))
+				
+				// Refresh knownKeys after fix
+				for _, k := range keys {
+					knownKeys[k] = true
+				}
+			} else {
+				fr.Println(ui.Dim("  Skipped auto-fix."))
+			}
+			fmt.Print(fr.String())
 		}
+		
+		// Recalculate ghosts for the final display
 		ghosts = buildGhosts(findings, knownKeys)
+	}
+
+	// Log successful audit entry
+	logger, _ := audit.NewLogger(".taso/audit")
+	if logger != nil {
+		logger.Log(audit.BuildEntry("ghost", ghostDir, ghostEnvFiles,
+			len(ghosts), len(findings), 0, time.Since(startTime), "success"))
 	}
 
 	if ghostJSON {
@@ -199,30 +260,34 @@ func printGhostHuman(ghosts map[string][]scanner.Usage, findings map[string][]sc
 }
 
 func printGhostJSON(ghosts map[string][]scanner.Usage, loadedFiles []string) error {
-	fmt.Println("{")
-	fmt.Printf("  \"ghost_count\": %d,\n", len(ghosts))
-	fmt.Printf("  \"checked_files\": %s,\n", jsonStringArray(loadedFiles))
-	fmt.Println("  \"ghosts\": [")
-	names := sortedKeys(ghosts)
-	for i, name := range names {
-		comma := ","
-		if i == len(names)-1 {
-			comma = ""
-		}
-		usages := ghosts[name]
-		fmt.Printf("    {\"var\": %q, \"usages\": [", name)
-		for j, u := range usages {
-			uc := ","
-			if j == len(usages)-1 {
-				uc = ""
-			}
-			fmt.Printf("{\"file\": %q, \"line\": %d}%s", u.File, u.Line, uc)
-		}
-		fmt.Printf("]}%s\n", comma)
+	type ghostEntry struct {
+		Var    string          `json:"var"`
+		Usages []scanner.Usage `json:"usages"`
 	}
-	fmt.Println("  ]")
-	fmt.Println("}")
-	return nil
+
+	type output struct {
+		GhostCount   int          `json:"ghost_count"`
+		CheckedFiles []string     `json:"checked_files"`
+		Ghosts       []ghostEntry `json:"ghosts"`
+	}
+
+	out := output{
+		GhostCount:   len(ghosts),
+		CheckedFiles: loadedFiles,
+		Ghosts:       make([]ghostEntry, 0, len(ghosts)),
+	}
+
+	names := sortedKeys(ghosts)
+	for _, name := range names {
+		out.Ghosts = append(out.Ghosts, ghostEntry{
+			Var:    name,
+			Usages: ghosts[name],
+		})
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(out)
 }
 
 func buildGhosts(findings map[string][]scanner.Usage, knownKeys map[string]bool) map[string][]scanner.Usage {
@@ -282,9 +347,6 @@ func shouldSkipEnvDir(name string) bool {
 	return skip[name]
 }
 
-func autoDetectEnvFiles(dir string) []string {
-	return findAllEnvFiles(dir)
-}
 
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
@@ -295,10 +357,3 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func jsonStringArray(ss []string) string {
-	quoted := make([]string, len(ss))
-	for i, s := range ss {
-		quoted[i] = fmt.Sprintf("%q", s)
-	}
-	return "[" + strings.Join(quoted, ", ") + "]"
-}

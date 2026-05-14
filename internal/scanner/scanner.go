@@ -1,9 +1,15 @@
 package scanner
 
 import (
+	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+
+	jsast "github.com/dop251/goja/ast"
+	"github.com/dop251/goja/file"
+	jsparser "github.com/dop251/goja/parser"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,9 +17,12 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/Hossiy21/taso/internal/cache"
+	"github.com/Hossiy21/taso/internal/security"
 )
 
-var dynamicPattern = regexp.MustCompile(`process\.env\[[^'"`+"`"+`"\n]+\]`)
+var dynamicPattern = regexp.MustCompile(`process\.env\[[^'"` + "`" + `"\n]+\]`)
 var aliasPatternJS = regexp.MustCompile(`(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*process\.env`)
 var aliasPatternPy = regexp.MustCompile(`([a-zA-Z0-9_]+)\s*=\s*os\.environ`)
 
@@ -24,10 +33,33 @@ type Usage struct {
 	Lang string
 }
 
-// ScanDir walks a directory and returns a map of env var name -> []Usage
-func ScanDir(root string, extraIgnores []string) (map[string][]Usage, error) {
+// ScanDir walks a directory and returns a map of env var name -> []Usage.
+// It uses the provided cache store to skip unchanged files.
+func ScanDir(root string, extraIgnores []string, store *cache.Store) (map[string][]Usage, error) {
+	// SECURITY: Prevent directory traversal attacks and ensure path accessibility
+	if err := security.ValidateScanPath(root, ""); err != nil {
+		return nil, err
+	}
+
+	// Verify the directory exists and is readable
+	info, err := os.Lstat(root)
+	if err != nil {
+		return nil, fmt.Errorf("scan directory not accessible: %w", err)
+	}
+
+	if (info.Mode() & os.ModeSymlink) != 0 {
+		return nil, fmt.Errorf("symlinks not allowed as scan directory")
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("scan path is not a directory: %s", root)
+	}
+
 	results := map[string][]Usage{}
 	var mu sync.Mutex
+
+	// Resource monitoring for DoS prevention
+	monitor := security.NewResourceMonitor()
 
 	type task struct {
 		path string
@@ -45,20 +77,63 @@ func ScanDir(root string, extraIgnores []string) (map[string][]Usage, error) {
 		go func() {
 			defer wg.Done()
 			for t := range taskChan {
+				// SECURITY: Skip files that exceed size limits
+				if security.ShouldSkipFile(t.path) {
+					monitor.RecordSkippedFile()
+					continue
+				}
+
+				// CACHE: Check if file has changed
 				var findings map[string][]Usage
-				switch t.ext {
-				case ".go":
-					findings = scanGo(t.path)
-				case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs":
-					findings = scanJS(t.path)
-				case ".py":
-					findings = scanPython(t.path)
-				case ".rs":
-					findings = scanRust(t.path)
-				case ".rb":
-					findings = scanRuby(t.path)
-				case ".java":
-					findings = scanJava(t.path)
+				var hash string
+				if store != nil {
+					hash, _ = cache.ComputeHash(t.path)
+					if raw, ok := store.Get(t.path, hash); ok {
+						var m map[string][]Usage
+						if err := json.Unmarshal(raw, &m); err == nil {
+							findings = m
+						}
+					}
+				}
+
+				if findings == nil {
+					switch t.ext {
+					case ".go":
+						findings = scanGo(t.path)
+					case ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs":
+						findings = scanJS(t.path)
+					case ".py":
+						findings = scanPython(t.path)
+					case ".rs":
+						findings = scanRust(t.path)
+					case ".rb":
+						findings = scanRuby(t.path)
+					case ".java":
+						findings = scanJava(t.path)
+					case ".cs":
+						findings = scanCSharp(t.path)
+					case ".php":
+						findings = scanPHP(t.path)
+					case ".kt", ".kts":
+						findings = scanKotlin(t.path)
+					}
+
+					// Update cache
+					if store != nil && hash != "" {
+						store.Set(t.path, hash, findings)
+					}
+				}
+
+				// Record resource usage
+				info, _ := os.Stat(t.path)
+				if info != nil {
+					if err := monitor.RecordFile(info.Size()); err != nil {
+						select {
+						case errChan <- err:
+						default:
+						}
+						return
+					}
 				}
 
 				if len(findings) > 0 {
@@ -88,7 +163,7 @@ func ScanDir(root string, extraIgnores []string) (map[string][]Usage, error) {
 
 			ext := strings.ToLower(filepath.Ext(path))
 			switch ext {
-			case ".go", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".py", ".rs", ".rb", ".java":
+			case ".go", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".py", ".rs", ".rb", ".java", ".cs", ".php", ".kt", ".kts":
 				taskChan <- task{path: path, ext: ext}
 			}
 			return nil
@@ -182,30 +257,245 @@ func scanGo(path string) map[string][]Usage {
 
 // ── JS / TS scanner ────────────────────────────────────────────────────────────
 // Catches: process.env.KEY, process.env["KEY"], process.env?.KEY
+// Accepts both uppercase and lowercase env var names
 
 var jsPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`process\.env\.([A-Z][A-Z0-9_]*)`),
-	regexp.MustCompile(`process\.env\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
-	regexp.MustCompile(`process\.env\?\.([A-Z][A-Z0-9_]*)`),
-	regexp.MustCompile(`process\.env\?\.\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
-	regexp.MustCompile(`import\.meta\.env\.([A-Z][A-Z0-9_]*)`),
-	regexp.MustCompile(`import\.meta\.env\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
-	regexp.MustCompile(`import\.meta\.env\?\.\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\]`),
+	regexp.MustCompile(`process\.env\.([a-zA-Z_][a-zA-Z0-9_]*)`),
+	regexp.MustCompile(`process\.env\[\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]\s*\]`),
+	regexp.MustCompile(`process\.env\?\.([a-zA-Z_][a-zA-Z0-9_]*)`),
+	regexp.MustCompile(`process\.env\?\.\[\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]\s*\]`),
+	regexp.MustCompile(`import\.meta\.env\.([a-zA-Z_][a-zA-Z0-9_]*)`),
+	regexp.MustCompile(`import\.meta\.env\[\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]\s*\]`),
+	regexp.MustCompile(`import\.meta\.env\?\.\[\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]\s*\]`),
 }
 
 func scanJS(path string) map[string][]Usage {
-	return scanWithPatterns(path, "js", jsPatterns)
+	astResults := scanJSWithAST(path)
+	regexResults := scanWithPatterns(path, "js", jsPatterns)
+
+	// Merge regex results for keys not found by AST
+	for k, v := range regexResults {
+		if _, ok := astResults[k]; !ok {
+			astResults[k] = v
+		}
+	}
+
+	return astResults
+}
+
+func scanJSWithAST(path string) map[string][]Usage {
+	results := map[string][]Usage{}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return results
+	}
+
+	program, err := jsparser.ParseFile(nil, path, string(content), 0)
+	if err != nil {
+		return results
+	}
+
+	record := func(key string, idx file.Idx) {
+		results[key] = append(results[key], Usage{
+			File: path,
+			Line: getLine(content, idx),
+			Lang: "js",
+		})
+	}
+
+	var walk func(jsast.Node)
+	walk = func(n jsast.Node) {
+		if n == nil {
+			return
+		}
+		// fmt.Printf("WALK: %T\n", n)
+
+		// 1. Detect process.env.KEY or process.env['KEY']
+		if dot, ok := n.(*jsast.DotExpression); ok {
+			leftStr := nodeToString(dot.Left)
+			if leftStr == "process.env" || leftStr == "import.meta.env" {
+				record(string(dot.Identifier.Name), dot.Idx0())
+			}
+		}
+
+		if brac, ok := n.(*jsast.BracketExpression); ok {
+			leftStr := nodeToString(brac.Left)
+			if leftStr == "process.env" || leftStr == "import.meta.env" {
+				if lit, ok := brac.Member.(*jsast.StringLiteral); ok {
+					record(string(lit.Value), brac.Idx0())
+				}
+			}
+		}
+
+		// 2. Detect destructuring: const { KEY } = process.env
+		if decl, ok := n.(*jsast.VariableDeclaration); ok {
+			for _, vd := range decl.List {
+				if vd.Initializer != nil {
+					initStr := nodeToString(vd.Initializer)
+					if initStr == "process.env" || initStr == "import.meta.env" {
+						if obj, ok := vd.Target.(*jsast.ObjectPattern); ok {
+							for _, prop := range obj.Properties {
+								if key, ok := getPropertyNameFromInterface(prop); ok {
+									record(key, prop.Idx0())
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if decl, ok := n.(*jsast.LexicalDeclaration); ok {
+			for _, b := range decl.List {
+				if b.Initializer != nil {
+					initStr := nodeToString(b.Initializer)
+					if initStr == "process.env" || initStr == "import.meta.env" {
+						if obj, ok := b.Target.(*jsast.ObjectPattern); ok {
+							for _, prop := range obj.Properties {
+								if key, ok := getPropertyNameFromInterface(prop); ok {
+									record(key, prop.Idx0())
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 3. Detect assignments/aliases: const env = process.env
+		if decl, ok := n.(*jsast.VariableDeclaration); ok {
+			for _, vd := range decl.List {
+				if vd.Initializer != nil {
+					initStr := nodeToString(vd.Initializer)
+					if initStr == "process.env" || initStr == "import.meta.env" {
+						if _, ok := vd.Target.(*jsast.Identifier); ok {
+							results["__ALIAS_DETECTION__"] = append(results["__ALIAS_DETECTION__"], Usage{
+								File: path,
+								Line: getLine(content, vd.Target.Idx0()),
+								Lang: "js",
+							})
+						}
+					}
+				}
+			}
+		}
+		if decl, ok := n.(*jsast.LexicalDeclaration); ok {
+			for _, b := range decl.List {
+				if b.Initializer != nil {
+					initStr := nodeToString(b.Initializer)
+					if initStr == "process.env" || initStr == "import.meta.env" {
+						if _, ok := b.Target.(*jsast.Identifier); ok {
+							results["__ALIAS_DETECTION__"] = append(results["__ALIAS_DETECTION__"], Usage{
+								File: path,
+								Line: getLine(content, b.Target.Idx0()),
+								Lang: "js",
+							})
+						}
+					}
+				}
+			}
+		}
+
+		// Recursive walk
+		switch node := n.(type) {
+		case *jsast.Program:
+			for _, stmt := range node.Body {
+				walk(stmt)
+			}
+		case *jsast.BlockStatement:
+			for _, stmt := range node.List {
+				walk(stmt)
+			}
+		case *jsast.ExpressionStatement:
+			walk(node.Expression)
+		case *jsast.VariableStatement:
+			for _, b := range node.List {
+				walk(b.Initializer)
+			}
+		case *jsast.LexicalDeclaration:
+			for _, b := range node.List {
+				walk(b.Initializer)
+			}
+		case *jsast.VariableDeclaration:
+			for _, vd := range node.List {
+				walk(vd.Initializer)
+			}
+		case *jsast.DotExpression:
+			walk(node.Left)
+		case *jsast.BracketExpression:
+			walk(node.Left)
+			walk(node.Member)
+		case *jsast.AssignExpression:
+			walk(node.Left)
+			walk(node.Right)
+		case *jsast.CallExpression:
+			walk(node.Callee)
+			for _, arg := range node.ArgumentList {
+				walk(arg)
+			}
+		}
+	}
+
+	walk(program)
+
+	return results
+}
+
+func getLine(content []byte, idx file.Idx) int {
+	line := 1
+	pos := int(idx) - 1
+	for i := 0; i < pos && i < len(content); i++ {
+		if content[i] == '\n' {
+			line++
+		}
+	}
+	return line
+}
+
+func nodeToString(n jsast.Node) string {
+	if n == nil {
+		return ""
+	}
+	switch node := n.(type) {
+	case *jsast.Identifier:
+		return string(node.Name)
+	case *jsast.DotExpression:
+		return nodeToString(node.Left) + "." + string(node.Identifier.Name)
+	case *jsast.MetaProperty:
+		return string(node.Meta.Name) + "." + string(node.Property.Name)
+	}
+	return ""
+}
+
+func getPropertyNameFromInterface(p jsast.Property) (string, bool) {
+	if pk, ok := p.(*jsast.PropertyKeyed); ok {
+		return getPropertyName(pk.Key)
+	}
+	if ps, ok := p.(*jsast.PropertyShort); ok {
+		return string(ps.Name.Name), true
+	}
+	return "", false
+}
+
+func getPropertyName(n jsast.Node) (string, bool) {
+	if id, ok := n.(*jsast.Identifier); ok {
+		return string(id.Name), true
+	}
+	if lit, ok := n.(*jsast.StringLiteral); ok {
+		return string(lit.Value), true
+	}
+	return "", false
 }
 
 // ── Python scanner ─────────────────────────────────────────────────────────────
 // Catches: os.environ["KEY"], os.environ.get("KEY"), os.getenv("KEY")
+// Accepts both uppercase and lowercase env var names
 
 var pyPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`os\.environ\[['"]([A-Z][A-Z0-9_]*)['"]\]`),
-	regexp.MustCompile(`os\.environ\.get\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
-	regexp.MustCompile(`os\.environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
-	regexp.MustCompile(`os\.getenv\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
-	regexp.MustCompile(`environ\.get\(\s*['"]([A-Z][A-Z0-9_]*)['"]`),
+	regexp.MustCompile(`os\.environ\[['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]\]`),
+	regexp.MustCompile(`os\.environ\.get\(\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]`),
+	regexp.MustCompile(`os\.environ\.setdefault\(\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]`),
+	regexp.MustCompile(`os\.getenv\(\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]`),
+	regexp.MustCompile(`environ\.get\(\s*['"]([ a-zA-Z_][a-zA-Z0-9_]*)['"]`),
 }
 
 func scanPython(path string) map[string][]Usage {
@@ -214,12 +504,13 @@ func scanPython(path string) map[string][]Usage {
 
 // ── Rust scanner ───────────────────────────────────────────────────────────────
 // Catches: env::var("KEY"), std::env::var("KEY"), env!("KEY")
+// Accepts both uppercase and lowercase env var names
 
 var rustPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`env::var\(\s*["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`std::env::var\(\s*["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`env!\(\s*["']([A-Z][A-Z0-9_]*)["']`),
-	regexp.MustCompile(`option_env!\(\s*["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`env::var\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
+	regexp.MustCompile(`std::env::var\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
+	regexp.MustCompile(`env!\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
+	regexp.MustCompile(`option_env!\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
 }
 
 func scanRust(path string) map[string][]Usage {
@@ -228,10 +519,11 @@ func scanRust(path string) map[string][]Usage {
 
 // ── Ruby scanner ───────────────────────────────────────────────────────────────
 // Catches: ENV["KEY"], ENV.fetch("KEY"), ENV['KEY']
+// Accepts both uppercase and lowercase env var names
 
 var rubyPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`ENV\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]`),
-	regexp.MustCompile(`ENV\.fetch\(\s*["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`ENV\[\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']\s*\]`),
+	regexp.MustCompile(`ENV\.fetch\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
 }
 
 func scanRuby(path string) map[string][]Usage {
@@ -240,13 +532,49 @@ func scanRuby(path string) map[string][]Usage {
 
 // ── Java scanner ───────────────────────────────────────────────────────────────
 // Catches: System.getenv("KEY")
+// Accepts both uppercase and lowercase env var names
 
 var javaPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`System\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']`),
+	regexp.MustCompile(`System\.getenv\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
 }
 
 func scanJava(path string) map[string][]Usage {
 	return scanWithPatterns(path, "java", javaPatterns)
+}
+
+// ── C# scanner ────────────────────────────────────────────────────────────────
+// Catches: Environment.GetEnvironmentVariable("KEY")
+
+var csPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`Environment\.GetEnvironmentVariable\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
+}
+
+func scanCSharp(path string) map[string][]Usage {
+	return scanWithPatterns(path, "csharp", csPatterns)
+}
+
+// ── PHP scanner ───────────────────────────────────────────────────────────────
+// Catches: getenv("KEY"), $_ENV["KEY"], $_SERVER["KEY"]
+
+var phpPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`getenv\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
+	regexp.MustCompile(`\$_ENV\[\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']\s*\]`),
+	regexp.MustCompile(`\$_SERVER\[\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']\s*\]`),
+}
+
+func scanPHP(path string) map[string][]Usage {
+	return scanWithPatterns(path, "php", phpPatterns)
+}
+
+// ── Kotlin scanner ────────────────────────────────────────────────────────────
+// Catches: System.getenv("KEY")
+
+var ktPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`System\.getenv\(\s*["']([ a-zA-Z_][a-zA-Z0-9_]*)["']`),
+}
+
+func scanKotlin(path string) map[string][]Usage {
+	return scanWithPatterns(path, "kotlin", ktPatterns)
 }
 
 // ── Generic regex scanner ──────────────────────────────────────────────────────

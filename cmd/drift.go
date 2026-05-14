@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Hossiy21/taso/internal/audit"
 	"github.com/Hossiy21/taso/internal/envreader"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
@@ -31,6 +32,8 @@ func init() {
 }
 
 func runDrift(cmd *cobra.Command, args []string) error {
+	startTime := time.Now()
+
 	snap, err := loadSnapshot()
 	if err != nil {
 		return fmt.Errorf("no snapshot found — run 'taso snap' first")
@@ -67,6 +70,13 @@ func runDrift(cmd *cobra.Command, args []string) error {
 	sort.Strings(added)
 	sort.Strings(removed)
 	sort.Strings(changed)
+
+	// Log successful audit entry
+	logger, _ := audit.NewLogger(".taso/audit")
+	if logger != nil {
+		logger.Log(audit.BuildEntry("drift", ".", snap.EnvFiles,
+			len(added)+len(removed)+len(changed), 0, 0, time.Since(startTime), "success"))
+	}
 
 	if driftJSON {
 		return printDriftJSON(snap, added, removed, changed)

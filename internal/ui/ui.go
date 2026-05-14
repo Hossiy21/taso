@@ -44,7 +44,14 @@ func ScoreBar(score int, width int) string {
 	if filled > width {
 		filled = width
 	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+
+	// Use safer characters for better Windows compatibility
+	// Some older CMD terminals don't handle '█' and '░' well
+	charFilled := "="
+	charEmpty := "-"
+	
+	bar := strings.Repeat(charFilled, filled) + strings.Repeat(charEmpty, width-filled)
+	bar = "[" + bar + "]"
 
 	var color lipgloss.Color
 	switch {

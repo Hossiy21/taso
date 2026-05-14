@@ -93,7 +93,7 @@ func TestScanDirConcurrency(t *testing.T) {
 		}
 	}
 
-	results, err := ScanDir(dir, nil)
+	results, err := ScanDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestAliasDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := ScanDir(dir, nil)
+	results, err := ScanDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
