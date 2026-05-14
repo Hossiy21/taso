@@ -34,17 +34,26 @@ If you call `os.Getenv("STRIPE_SECRET")` in your code, but forgot to add it to y
 
 ## 📦 Installation
 
+### macOS & Linux (Homebrew)
 ```bash
-# Go install
-go install github.com/Hossiy21/taso@latest
+brew tap Hossiy21/tap
+brew install taso
+```
 
-# Verify
-taso version
+### Windows (Scoop)
+```bash
+scoop bucket add Hossiy21 https://github.com/Hossiy21/scoop-bucket
+scoop install taso
+```
+
+### Via Go
+```bash
+go install github.com/Hossiy21/taso@latest
 ```
 
 ---
 
-## � Security
+## 🛡️ Security
 
 Taso is built with security in mind:
 
@@ -57,7 +66,7 @@ For detailed security information, see our [Security Policy](SECURITY.md).
 
 ---
 
-## �🛠 Commands
+## 🛠️ Commands
 
 ### `taso ghost` — Find "Ghost" Variables
 Scans source code to find variables accessed in code but missing from `.env`.
