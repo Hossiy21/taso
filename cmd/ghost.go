@@ -117,7 +117,7 @@ func runGhost(cmd *cobra.Command, args []string) error {
 			fmt.Printf(ui.Warn2("  ? Auto-add %d missing variables to .env? [y/N] "), len(keys))
 			var response string
 			fmt.Scanln(&response)
-			
+
 			fr := ui.NewRenderer()
 			if strings.ToLower(response) == "y" {
 				err := autoFixEnv(ghosts, loadedFiles, ghostDir)
@@ -125,7 +125,7 @@ func runGhost(cmd *cobra.Command, args []string) error {
 					return fmt.Errorf("auto-fix failed: %w", err)
 				}
 				fr.Println(ui.Success(fmt.Sprintf("  ✔  Added %d variables to .env", len(keys))))
-				
+
 				// Refresh knownKeys after fix
 				for _, k := range keys {
 					knownKeys[k] = true
@@ -135,7 +135,7 @@ func runGhost(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Print(fr.String())
 		}
-		
+
 		// Recalculate ghosts for the final display
 		ghosts = buildGhosts(findings, knownKeys)
 	}
@@ -359,7 +359,6 @@ func shouldSkipEnvDir(name string) bool {
 	return skip[name]
 }
 
-
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -368,4 +367,3 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
-

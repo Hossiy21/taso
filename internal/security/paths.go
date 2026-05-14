@@ -39,7 +39,7 @@ func ValidateScanPath(requestedPath, basePath string) error {
 	}
 
 	if basePath == "" || basePath == "." {
-		// If no specific base path is enforced (other than current dir), 
+		// If no specific base path is enforced (other than current dir),
 		// we just ensure it's a valid directory.
 		info, err := os.Lstat(cleanedRequested)
 		if err != nil {

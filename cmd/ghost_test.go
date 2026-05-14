@@ -12,7 +12,7 @@ import (
 func TestAutoFixEnv(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	
+
 	// Start with an empty .env
 	if err := os.WriteFile(envPath, []byte("EXISTING_VAR=val"), 0o600); err != nil {
 		t.Fatal(err)

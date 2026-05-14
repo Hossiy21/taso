@@ -49,7 +49,7 @@ func ScoreBar(score int, width int) string {
 	// Some older CMD terminals don't handle '█' and '░' well
 	charFilled := "="
 	charEmpty := "-"
-	
+
 	bar := strings.Repeat(charFilled, filled) + strings.Repeat(charEmpty, width-filled)
 	bar = "[" + bar + "]"
 

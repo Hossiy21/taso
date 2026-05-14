@@ -18,10 +18,10 @@ type Entry struct {
 
 // Store manages the persistent cache
 type Store struct {
-	mu        sync.RWMutex
-	filePath  string
-	Entries   map[string]Entry `json:"entries"`
-	IsDirty   bool             `json:"-"`
+	mu       sync.RWMutex
+	filePath string
+	Entries  map[string]Entry `json:"entries"`
+	IsDirty  bool             `json:"-"`
 }
 
 // NewStore creates a new cache store

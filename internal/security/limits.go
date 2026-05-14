@@ -86,7 +86,7 @@ func (r *ResourceMonitor) RecordFile(size int64) error {
 	r.bytesScanned += size
 
 	// Check limits every 10 files or every 10MB to be more responsive
-	if r.filesScanned%10 == 0 || r.bytesScanned% (10*1024*1024) < size {
+	if r.filesScanned%10 == 0 || r.bytesScanned%(10*1024*1024) < size {
 		return r.CheckLimits()
 	}
 

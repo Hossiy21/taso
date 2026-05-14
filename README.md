@@ -7,9 +7,6 @@ Find what's silently wrong with your environment — before production does. Tas
 [![Go Report Card](https://goreportcard.com/badge/github.com/Hossiy21/taso)](https://goreportcard.com/report/github.com/Hossiy21/taso)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-<!-- ## 🎬 Demo -->
-<!-- ![Taso Demo](./taso-demo.gif) -->
-
 ---
 
 ## ⚡ Why Taso?
@@ -36,7 +33,7 @@ If you call `os.Getenv("STRIPE_SECRET")` in your code, but forgot to add it to y
 
 ### macOS & Linux (Homebrew)
 ```bash
-brew tap Hossiy21/tap
+brew tap Hossiy21/homebrew-tap
 brew install taso
 ```
 

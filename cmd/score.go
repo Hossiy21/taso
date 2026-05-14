@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/Hossiy21/taso/internal/audit"
-	"github.com/Hossiy21/taso/internal/envreader"
 	"github.com/Hossiy21/taso/internal/cache"
+	"github.com/Hossiy21/taso/internal/envreader"
 	"github.com/Hossiy21/taso/internal/scanner"
 	"github.com/Hossiy21/taso/internal/ui"
 	"github.com/spf13/cobra"
@@ -75,7 +75,7 @@ func runScore(cmd *cobra.Command, args []string) error {
 		cacheStore, _ := cache.NewStore(".taso")
 
 		findings, err := scanner.ScanDir(".", viper.GetStringSlice("ignored_dirs"), cacheStore)
-		
+
 		// CACHE: Save cache
 		if cacheStore != nil {
 			_ = cacheStore.Save()
