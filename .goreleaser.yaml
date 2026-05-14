@@ -41,6 +41,7 @@ brews:
     homepage: "https://github.com/Hossiy21/taso"
     description: "Find env vars your code calls but don't exist in your .env files"
     license: "MIT"
+    token: "{{ .Env.CUSTOM_GITHUB_TOKEN }}"
 
 scoops:
   - repository:
@@ -49,3 +50,4 @@ scoops:
     homepage: "https://github.com/Hossiy21/taso"
     description: "Find env vars your code calls but don't exist in your .env files"
     license: "MIT"
+    token: "{{ .Env.CUSTOM_GITHUB_TOKEN }}"
