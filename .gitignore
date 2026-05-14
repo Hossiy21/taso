@@ -1,9 +1,15 @@
 # binaries
 *.exe
+razify.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+
+# demo files
+demo.tape
+taso-demo.gif
+razify-demo.gif
 
 # build outputs
 /bin/
