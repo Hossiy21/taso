@@ -26,10 +26,14 @@ Examples:
 	RunE: runShare,
 }
 
-var shareEnvFiles []string
+var (
+	shareEnvFiles []string
+	shareDir      string
+)
 
 func init() {
 	shareCmd.Flags().StringArrayVar(&shareEnvFiles, "env", nil, "Env files to fingerprint")
+	shareCmd.Flags().StringVar(&shareDir, "dir", ".", "Directory to fingerprint")
 }
 
 func runShare(cmd *cobra.Command, args []string) error {
@@ -45,9 +49,9 @@ func runShare(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(shareEnvFiles) == 0 {
-		shareEnvFiles = autoDetectEnvFiles(".")
+		shareEnvFiles = autoDetectEnvFiles(shareDir)
 		if len(shareEnvFiles) == 0 {
-			return fmt.Errorf("no .env files found")
+			return fmt.Errorf("no .env files found in %s", shareDir)
 		}
 	}
 

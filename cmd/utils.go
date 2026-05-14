@@ -8,12 +8,12 @@ import (
 
 // autoDetectEnvFiles looks for common .env variants in a directory
 func autoDetectEnvFiles(dir string) []string {
-	variants := []string{".env", ".env.local", ".env.development", ".env.test", ".env.production"}
+	variants := []string{".env", ".env.local", ".env.development", ".env.test", ".env.production", ".env.example"}
 	found := []string{}
 	for _, v := range variants {
 		path := filepath.Join(dir, v)
 		if _, err := os.Stat(path); err == nil {
-			found = append(found, v)
+			found = append(found, path)
 		}
 	}
 	return found
