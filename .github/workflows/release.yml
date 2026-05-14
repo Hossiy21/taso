@@ -30,7 +30,7 @@ jobs:
           version: "~> v2"
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CUSTOM_GITHUB_TOKEN }}
           # You might need to create a Personal Access Token (PAT) 
           # with "repo" scope and add it to your secrets as CUSTOM_GITHUB_TOKEN 
           # to allow GoReleaser to push to your OTHER repos (brew-tap and scoop-bucket)
