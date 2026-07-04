@@ -84,9 +84,37 @@ $ taso ghost
 
 | Flag | Description |
 |---|---|
-| `--fix` | Interactively add missing variables to your `.env` |
+| `--fix` | Interactive prompts for values/comments; writes sorted `.env` + `.env.example` |
+| `--fix-example` | Update `.env.example` during `--fix` (default: true) |
 | `--json` | Export findings for CI/CD pipelines |
+| `--sarif <file>` | Write SARIF for GitHub code scanning |
 | `--dir <path>` | Specify a custom directory to scan |
+
+---
+
+### `taso contract` — Full Env Contract
+
+Bidirectional report: **ghost** (in code, missing from `.env`), **dead** (in `.env`, unused in code), and **matched**.
+
+```bash
+taso contract
+taso contract --json
+taso contract --sarif taso-results.sarif --fail
+```
+
+---
+
+### `taso sync` — Compare with Infisical or Doppler (names only)
+
+```bash
+export INFISICAL_TOKEN=...
+export INFISICAL_PROJECT_ID=...
+export INFISICAL_ENV=dev
+taso sync --provider infisical
+
+export DOPPLER_TOKEN=...
+taso sync --provider doppler --json
+```
 
 ---
 
@@ -113,6 +141,13 @@ taso snap     # Save a baseline of your current keys
 taso drift    # See what keys were added, removed, or changed since the snapshot
 ```
 
+**Multi-environment comparison** (no snapshot required):
+
+```bash
+taso drift --compare .env.dev,.env.staging,.env.production
+taso drift --env .env.local --env .env.production --json
+```
+
 ---
 
 ## 🌍 Supported Languages
@@ -121,8 +156,8 @@ taso drift    # See what keys were added, removed, or changed since the snapshot
 |---|---|---|
 | **Go** | AST | `os.Getenv`, `os.LookupEnv` |
 | **JS / TS** | AST | `process.env`, `import.meta.env`, **Destructuring** |
-| **Python** | Regex+ | `os.environ`, `os.getenv`, `environ.get` |
-| **Rust** | Regex+ | `env::var`, `env!`, `option_env!` |
+| **Python** | Syntax-tree (lexer) | `os.environ`, `os.getenv`, `environ.get` |
+| **Rust** | Syntax-tree (lexer) | `env::var`, `env!`, `option_env!` |
 | **Ruby** | Regex+ | `ENV["KEY"]`, `ENV.fetch` |
 | **Java** | Regex+ | `System.getenv` |
 | **C#** | Regex+ | `Environment.GetEnvironmentVariable` |
@@ -148,31 +183,39 @@ ignored_dirs:
 
 ## 🛡️ CI/CD Integration
 
-Taso is built for automation. Use the `--json` flag in your GitHub Actions or GitLab CI to fail builds if the environment score drops too low.
+### Official GitHub Action
 
-```bash
-# Example CI Check
-taso ghost --json | jq '.ghost_count == 0'
-```
-
-### GitHub Actions Example
+Posts a **PR summary comment**, uploads **SARIF** to code scanning, and enforces ghost/dead/score gates:
 
 ```yaml
-name: Environment Drift Check
+name: Taso
 
 on: [pull_request, push]
 
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
 jobs:
-  taso-check:
+  env-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
+      - uses: actions/checkout@v4
+      - uses: Hossiy21/taso/.github/actions/taso@main
         with:
-          go-version: '1.23'
-      - run: go install github.com/Hossiy21/taso@latest
-      - run: taso score
-      - run: taso ghost --json
+          directory: .
+          fail-on-ghosts: 'true'
+          minimum-score: '80'
+          post-comment: 'true'
+          upload-sarif: 'true'
+```
+
+### Manual CI
+
+```bash
+taso contract --json --sarif taso.sarif --fail
+taso score --dir . --json --fail
 ```
 
 ---
